@@ -1,0 +1,425 @@
+---
+title: "DEG_TALS_nmtRNA"
+output: html_document
+date: "2025-04-10"
+---
+
+```{r}
+setwd("/Users/shahada/Desktop/Research_Project/")
+```
+
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(vsn)
+library(DESeq2)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(RColorBrewer)
+library(ComplexHeatmap)  # Load the ComplexHeatmap package
+library(circlize)  # Load circlize for annotations
+library(SummarizedExperiment)
+library(tibble)
+library(readxl)
+```
+
+
+
+#Load expression matrix and nuclear-encoded mitochondrial genes
+```{r}
+# Mitochondrial genes (nuclear-encoded)
+mito_genes_TALS <- read_excel("Human.MitoCarta3.0 copy 2.xlsx", sheet = "A Human MitoCarta3.0")
+
+# ALS-related genes (e.g., DEGs from brain bank)
+als_genes_TALS <- read.delim("merged_cellular_TALS.txt")
+```
+
+
+
+
+
+#Filtering NEM genes from expression matrix
+```{r}
+als_mito_filtered_TALS <- als_genes_TALS[als_genes_TALS$gene %in% mito_genes_TALS$EnsemblGeneID_mapping_version_20200130, ]
+```
+
+
+```{r}
+counts_nmtRNA_TALS <- als_mito_filtered_TALS
+```
+
+
+#Loading metadata
+```{r}
+coldata_nmtRNA_TALS <- read.delim("./phenotypeStarting_TALSmedial_SV1.txt", stringsAsFactors = FALSE, sep = " ")
+```
+
+
+
+
+#Converting Status column
+```{r}
+coldata_nmtRNA_TALS <- coldata_nmtRNA_TALS %>%
+  mutate(Sex = recode(Sex, "1" = "Male", "2" = "Female"),
+         Status = recode(Status, "1" = "Control", "2" = "Case"))
+```
+
+
+
+
+#Matching strings
+```{r}
+# Set the 'gene' column as rownames
+rownames(counts_nmtRNA_TALS) <- counts_nmtRNA_TALS$gene
+```
+
+
+
+
+#Filter coldata from counts
+```{r}
+# Match samples between coldata and counts
+samples_in_common <- intersect(rownames(coldata_nmtRNA_TALS), colnames(counts_nmtRNA_TALS))
+
+# Subset counts matrix to only those samples (columns)
+counts_nmtRNA_TALS <- counts_nmtRNA_TALS[, samples_in_common, drop = FALSE]
+```
+
+
+#Match samples, columns in expression matrix and rows in metadata
+```{r}
+all.equal(colnames(counts_nmtRNA_TALS), rownames(coldata_nmtRNA_TALS))
+```
+
+
+
+```{r}
+se <- SummarizedExperiment(
+    assays = list(counts_nmtRNA_TALS = as.matrix(counts_nmtRNA_TALS)),
+    colData = coldata_nmtRNA_TALS)
+```
+
+
+
+
+
+#relevel Status factor to set "Control" as the reference group
+```{r}
+coldata_nmtRNA_TALS$Status <- relevel(factor(coldata_nmtRNA_TALS$Status), ref = "Control")
+```
+
+
+
+
+
+
+#Make sure all covariates are factors, create design formula for DESeq
+```{r}
+coldata_nmtRNA_TALS$Status <- as.factor(coldata_nmtRNA_TALS$Status)
+coldata_nmtRNA_TALS$Sex <- as.factor(coldata_nmtRNA_TALS$Sex)
+coldata_nmtRNA_TALS$AgeCat <- as.factor(coldata_nmtRNA_TALS$AgeCat)
+coldata_nmtRNA_TALS$PMDCat <- as.factor(coldata_nmtRNA_TALS$PMDCat)
+coldata_nmtRNA_TALS$RINCat <- as.factor(coldata_nmtRNA_TALS$RINCat)
+dds_tals <- DESeqDataSetFromMatrix(countData = counts_nmtRNA_TALS, colData = coldata_nmtRNA_TALS, design = ~ Sex + AgeCat + PMDCat + RINCat + SV1 + Status, tidy = FALSE, ignoreRank = FALSE)
+```
+
+
+
+
+
+#Filter DEGs to include > 5 expression
+```{r}
+se <- dds_tals[rowSums(assay(dds_tals, "counts")) > 5, ]
+nrow(se)
+```
+
+
+
+
+#run DESeq
+```{r}
+dds_tals <- DESeq(dds_tals)
+```
+
+
+
+#DE results
+```{r}
+results(dds_tals)
+```
+
+
+
+```{r}
+res_TALS <- results(dds_tals)
+```
+
+
+
+```{r}
+summary(res_TALS)
+```
+
+
+
+#Convert Ensembl gene identifiers to standardized gene symbols 
+```{r}
+if (!requireNamespace("biomaRt", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("biomaRt")
+
+library(biomaRt)
+```
+
+
+
+
+```{r}
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+```
+
+
+
+```{r}
+res <- results(dds_tals)
+res_df <- as.data.frame(res)
+res_df$ensembl_gene_id <- rownames(res_df)
+```
+
+
+```{r}
+gene_annotations <- getBM(
+  filters = "ensembl_gene_id",
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  values = rownames(res_df),
+  mart = mart
+)
+```
+
+
+
+
+```{r}
+res_annotated_TALS <- merge(res_df, gene_annotations, by = "ensembl_gene_id", all.x = TRUE)
+```
+
+
+
+
+#Save output (Optional)
+```{r}
+write.csv(res_annotated_TALS, "DEGs_nmtRNA_TALS_all.csv")
+```
+
+
+
+#Filter for significant NEM DEGs
+```{r}
+all_deg_TALS <- res_annotated_TALS[which(res_annotated_TALS$padj < 0.05), ]
+```
+
+
+
+#Filter up and down regulated NEM DEGs
+```{r}
+up_deg_TALS  <- all_deg_TALS[which(all_deg_TALS$log2FoldChange > 0), ]
+down_deg_TALS <- all_deg_TALS[which(all_deg_TALS$log2FoldChange < 0), ]
+```
+
+
+
+
+#Distribution of log2FC for significant genes
+```{r}
+# In R (assuming you used limma or DESeq2):
+deg_sig_tals <- all_deg_TALS
+hist(deg_sig_tals$log2FoldChange, breaks=100, main="Distribution of log2FC for significant genes")
+```
+
+
+
+
+#Calculate dispersion (biological variability)
+```{r}
+plotDispEsts(dds_tals)
+```
+
+
+
+
+#Volcano plot of sig NEM DEGs
+```{r}
+install.packages("ggrepel")  # only run once
+library(ggrepel)
+```
+
+
+
+```{r}
+library(ggplot2)
+
+# Filter for NEM genes only
+nem_deg_tals <- res_annotated_TALS
+
+nem_deg_clean_tals <- nem_deg_tals[!is.na(nem_deg_tals$padj) & !is.na(nem_deg_tals$log2FoldChange), ]
+
+top_genes_tals <- nem_deg_clean_tals[order(nem_deg_clean_tals$padj), ][1:20, ]
+
+
+# Define significance threshold for adjusted p-value only
+padj_thresh <- 0.05
+nem_deg_clean_tals$significance <- ifelse(nem_deg_clean_tals$padj < padj_thresh, "Significant", "Not significant")
+
+
+ggplot(nem_deg_clean_tals, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = significance), alpha = 0.8, size = 2) +
+  geom_text_repel(data = top_genes_tals, aes(label = hgnc_symbol), size = 3, max.overlaps = 20) +
+  scale_color_manual(values = c("gray", "red")) +
+  theme_minimal() +
+  labs(
+    title = "TALS Significant NEM DEGs",
+    x = "log2(Fold Change)",
+    y = "-log10(adjusted p-value)",
+    color = "Significance"
+  )
+```
+
+
+
+
+#Over Representation Analysis (Gene Ontology (GO) and KEGG)
+```{r}
+install.packages("BiocManager")
+BiocManager::install(c("clusterProfiler", "org.Hs.eg.db", "enrichplot", "ggplot2", "DOSE"))
+```
+
+
+
+
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+```
+
+
+
+
+```{r}
+library(dplyr)
+
+# Replace `gene_id` with your actual column name if different
+genes1_entrez <- bitr(all_deg_TALS$ensembl_gene_id, 
+                      fromType = "ENSEMBL", 
+                      toType = "ENTREZID", 
+                      OrgDb = org.Hs.eg.db)
+```
+
+```{r}
+deg1_merged <- inner_join(all_deg_TALS, genes1_entrez, by = c("ensembl_gene_id" = "ENSEMBL"))
+```
+
+
+#GO Biological Process
+```{r}
+go1 <- enrichGO(gene = deg1_merged$ENTREZID,
+                OrgDb = org.Hs.eg.db,
+                keyType = "ENTREZID",
+                ont = "BP",  # Options: "BP", "CC", "MF"
+                pAdjustMethod = "BH",
+                pvalueCutoff = 0.05,
+                qvalueCutoff = 0.2)
+```
+
+
+
+#GO Cellular Component
+```{r}
+go_cc1 <- enrichGO(gene = deg1_merged$ENTREZID,
+                OrgDb = org.Hs.eg.db,
+                keyType = "ENTREZID",
+                ont = "CC",  # Changed from "BP" to "CC"
+                pAdjustMethod = "BH",
+                pvalueCutoff = 0.05,
+                qvalueCutoff = 0.2)
+
+```
+
+
+
+#GO Molecular Function
+```{r}
+go_mf1 <- enrichGO(gene = deg1_merged$ENTREZID,
+                OrgDb = org.Hs.eg.db,
+                keyType = "ENTREZID",
+                ont = "MF",  # Changed from "BP" to "CC"
+                pAdjustMethod = "BH",
+                pvalueCutoff = 0.05,
+                qvalueCutoff = 0.2)
+```
+
+
+
+
+#KEGG annotation
+```{r}
+kegg1 <- enrichKEGG(gene = deg1_merged$ENTREZID,
+                    organism = "hsa",  # Use "mmu" if mouse
+                    pvalueCutoff = 0.05)
+```
+
+
+
+
+
+#ORA of NEM genes (plotting)
+#Biological Process plot
+```{r}
+library(enrichplot)
+
+# GO dotplot
+dotplot(go1, showCategory = 10, title = "GO BP Enrichment - TALS")
+```
+
+#Cellular Component plot
+```{r}
+dotplot(go_cc1, showCategory = 10, title = "GO CC Enrichment - TALS")
+```
+
+#Molecular Function plot
+```{r}
+dotplot(go_mf1, showCategory = 6, title = "GO MF Enrichment - TALS")
+```
+
+
+
+
+
+#KEGG annotation
+```{r}
+# KEGG dotplot
+dotplot(kegg1, showCategory = 10, title = "KEGG Enrichment - TALS")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
