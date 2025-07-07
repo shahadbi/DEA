@@ -1,6 +1,6 @@
 # DEA
 differential expression analysis
-# ALS Mitochondrial Transcriptomics Analysis
+# Transcriptomics Analysis
 
 This repository contains R scripts and workflows used in the differential expression and mitochondrial gene analysis of brain-derived transcriptomic data from ALS patient and control samples. The project specifically focuses on nuclear-encoded mitochondrial (NEM) genes using DESeq2, MitoCarta3.0, and functional enrichment analyses.
 
